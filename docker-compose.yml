@@ -1,0 +1,25 @@
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    depends_on:
+      - redis
+    environment:
+      PORT: "4000"
+      REDIS_ADDR: "redis:6379"
+      REDIS_DB: "0"
+      PUBLIC_BASE_URL: "http://localhost:4000"
+    ports:
+      - "4000:4000"
+
+volumes:
+  redis_data:

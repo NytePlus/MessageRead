@@ -1,0 +1,8 @@
+.git
+node_modules
+frontend/dist
+app/.gradle
+app/build
+app/app/build
+__pycache__
+*.pyc

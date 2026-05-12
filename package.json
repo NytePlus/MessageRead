@@ -2,12 +2,12 @@
   "name": "read-receipt-msg",
   "private": true,
   "scripts": {
-    "dev": "concurrently -n server,client -c blue,green \"npm run dev:server\" \"npm run dev -w client\"",
-    "dev:server": "go -C server run .",
-    "build": "npm run build -w client",
-    "start": "npm run build -w client && go -C server run ."
+    "dev": "concurrently -n backend,frontend -c blue,green \"npm run dev:backend\" \"npm run dev -w frontend\"",
+    "dev:backend": "python backend/main.py",
+    "build": "npm run build -w frontend",
+    "start": "npm run build -w frontend && python backend/main.py"
   },
-  "workspaces": ["client"],
+  "workspaces": ["frontend"],
   "devDependencies": {
     "concurrently": "^9.0.1"
   }

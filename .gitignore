@@ -1,5 +1,11 @@
 node_modules/
 dist/
+frontend/dist/
+app/.gradle/
+app/build/
+app/app/build/
+__pycache__/
+*.pyc
 .DS_Store
 .env
 .env.local
