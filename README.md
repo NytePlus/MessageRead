@@ -26,12 +26,12 @@
 docker compose up --build
 ```
 
-打开 [http://localhost:4000](http://localhost:4000) 即可使用。
+未配置证书时，容器内后端以 HTTP 监听 `:4000`，用于本地访问或作为 HTTPS 反向代理的 upstream。生产环境请通过反向代理或后端 TLS 证书对外提供 HTTPS。
 
-如需让手机或公网用户打开链接，请把 `docker-compose.yml` 里的 `PUBLIC_BASE_URL` 改成对方能访问的地址，例如：
+如需让手机或公网用户打开链接，可以让反向代理传递 `X-Forwarded-Proto` / `X-Forwarded-Host`，或设置 `PUBLIC_BASE_URL` 为对方能访问的 HTTPS 地址，例如：
 
 ```yaml
-PUBLIC_BASE_URL: "http://47.121.190.61:4000"
+PUBLIC_BASE_URL: "https://example.com"
 ```
 
 ## 本地开发
@@ -61,7 +61,14 @@ $env:REDIS_ADDR = "localhost:6379"
 python backend/main.py
 ```
 
-默认监听 `http://localhost:4000`。
+如果要让 Python 后端直接提供 HTTPS，请设置证书路径：
+
+```powershell
+$env:TLS_CERT_FILE = "C:\certs\fullchain.pem"
+$env:TLS_KEY_FILE = "C:\certs\privkey.pem"
+```
+
+如果不提供证书和私钥，后端仍以 HTTP 监听，适合放在 Nginx/Caddy/负载均衡后面做 HTTP upstream 转发。反向代理应传递 `X-Forwarded-Proto` 和 `X-Forwarded-Host`，后端会据此生成 HTTPS 的 `openUrl` / `statusUrl`；也可以设置 `PUBLIC_BASE_URL` 为公网 HTTPS 地址来显式覆盖。
 
 ### 5. 启动前端
 
@@ -69,12 +76,12 @@ python backend/main.py
 npm run dev -w frontend
 ```
 
-打开 [http://localhost:5173](http://localhost:5173)。
+打开 [http://localhost:5173](http://localhost:5173)。开发前端会默认通过 HTTPS 调用后端接口。
 
 如果后端不在默认地址，需要在 `frontend/.env.local` 中配置：
 
 ```text
-VITE_API_BASE=http://localhost:4000
+VITE_API_BASE=https://localhost:4000
 ```
 
 ## 环境变量
@@ -82,12 +89,14 @@ VITE_API_BASE=http://localhost:4000
 | 变量 | 作用 | 默认 |
 |------|------|------|
 | `PORT` | 后端监听端口 | `4000` |
-| `PUBLIC_BASE_URL` | 生成 `openUrl` / `statusUrl` 的根地址 | `http://localhost:<PORT>` |
+| `PUBLIC_BASE_URL` | 生成 `openUrl` / `statusUrl` 的根地址；未设置时从 `Host` / `X-Forwarded-*` 请求头推断 | 空 |
+| `TLS_CERT_FILE` | 后端直接启用 HTTPS 时使用的证书文件 | 空 |
+| `TLS_KEY_FILE` | 后端直接启用 HTTPS 时使用的私钥文件 | 空 |
 | `WEB_DIST` | 前端构建目录，存在则由后端托管 SPA | `frontend/dist` |
 | `REDIS_ADDR` | Redis 地址 | `localhost:6379` |
 | `REDIS_PASSWORD` | Redis 密码 | 空 |
 | `REDIS_DB` | Redis DB | `0` |
-| `VITE_API_BASE` | 前端开发时调用的 API 根地址 | 开发：`http://localhost:4000`；生产：同源 |
+| `VITE_API_BASE` | 前端开发时调用的 API 根地址 | 开发：`https://localhost:4000`；生产：同源 |
 
 ## Redis 数据
 
@@ -126,7 +135,7 @@ message:{uuid}
 请求示例：
 
 ```powershell
-Invoke-RestMethod -Uri "http://localhost:4000/api/messages" `
+Invoke-RestMethod -Uri "https://localhost:4000/api/messages" `
   -Method POST -ContentType "application/json" `
   -Body '{"toName":"小明","body":"你好"}'
 ```
@@ -138,21 +147,21 @@ Invoke-RestMethod -Uri "http://localhost:4000/api/messages" `
 默认后端地址是 Android 模拟器访问宿主机的地址：
 
 ```text
-http://10.0.2.2:4000
+https://10.0.2.2:4000
 ```
 
 真机调试时请改成电脑局域网 IP 或公网地址：
 
 ```powershell
 cd app
-.\gradlew assembleDebug -PAPI_BASE_URL=http://192.168.1.10:4000
+.\gradlew assembleDebug -PAPI_BASE_URL=https://example.com
 ```
 
 如果本机没有 Gradle Wrapper，可用 Android Studio 打开 `app/` 后同步工程，或安装 Gradle 后运行：
 
 ```powershell
 cd app
-gradle assembleDebug -PAPI_BASE_URL=http://192.168.1.10:4000
+gradle assembleDebug -PAPI_BASE_URL=https://example.com
 ```
 
 App 会在本地保存最近 50 条发送记录，字段为 `uuid` 和发送时间。

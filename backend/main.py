@@ -5,6 +5,7 @@ import json
 import os
 import posixpath
 import secrets
+import ssl
 import time
 from http import HTTPStatus
 from http.cookies import SimpleCookie
@@ -60,11 +61,27 @@ def listen_port() -> int:
     return int(raw or "4000")
 
 
-def public_base_url() -> str:
+def configured_public_base_url() -> str | None:
     raw = trim_str(os.getenv("PUBLIC_BASE_URL")).rstrip("/")
-    if raw:
-        return raw
-    return f"http://localhost:{listen_port()}"
+    return raw or None
+
+
+def first_header_value(value: str | None) -> str:
+    return trim_str((value or "").split(",", 1)[0])
+
+
+def tls_config() -> tuple[str, str] | None:
+    cert_file = trim_str(os.getenv("TLS_CERT_FILE"))
+    key_file = trim_str(os.getenv("TLS_KEY_FILE"))
+    if not cert_file and not key_file:
+        return None
+    if not cert_file or not key_file:
+        raise RuntimeError("启用 HTTPS 需要同时设置 TLS_CERT_FILE 和 TLS_KEY_FILE。")
+    if not Path(cert_file).is_file():
+        raise RuntimeError(f"TLS_CERT_FILE 不存在: {cert_file}")
+    if not Path(key_file).is_file():
+        raise RuntimeError(f"TLS_KEY_FILE 不存在: {key_file}")
+    return cert_file, key_file
 
 
 def redis_client() -> redis.Redis:
@@ -199,6 +216,27 @@ class Handler(SimpleHTTPRequestHandler):
     def path_only(self) -> str:
         return urlparse(self.path).path
 
+    def request_base_url(self) -> str:
+        configured = configured_public_base_url()
+        if configured:
+            return configured
+
+        forwarded_proto = first_header_value(self.headers.get("X-Forwarded-Proto")).lower()
+        if forwarded_proto in {"http", "https"}:
+            scheme = forwarded_proto
+        else:
+            scheme = "https" if isinstance(self.connection, ssl.SSLSocket) else "http"
+
+        host = first_header_value(self.headers.get("X-Forwarded-Host")) or first_header_value(self.headers.get("Host"))
+        if not host:
+            host = f"localhost:{listen_port()}"
+
+        forwarded_port = first_header_value(self.headers.get("X-Forwarded-Port"))
+        if forwarded_port and ":" not in host and forwarded_port not in {"80", "443"}:
+            host = f"{host}:{forwarded_port}"
+
+        return f"{scheme}://{host}".rstrip("/")
+
     def route_api_or_open(self, head_only: bool) -> bool:
         path = self.path_only()
         if path.startswith("/api/messages/") and path.endswith("/status"):
@@ -253,7 +291,7 @@ class Handler(SimpleHTTPRequestHandler):
                 "ownerVisitorID": "",
             }
         )
-        base = public_base_url()
+        base = self.request_base_url()
         self.write_json(
             HTTPStatus.OK,
             {
@@ -288,7 +326,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return trim_str(morsel.value), None
 
         visitor = nano_id(24)
-        cookie_header = f"{VISITOR_COOKIE}={visitor}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax"
+        secure = "; Secure" if self.request_base_url().startswith("https://") else ""
+        cookie_header = f"{VISITOR_COOKIE}={visitor}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax{secure}"
         return visitor, cookie_header
 
     def handle_open(self, message_id: str, head_only: bool) -> None:
@@ -373,12 +412,22 @@ class Handler(SimpleHTTPRequestHandler):
 
 def main() -> None:
     port = listen_port()
+    tls = tls_config()
     if WEB_DIST.is_dir():
         print(f"已托管前端静态资源: {WEB_DIST}", flush=True)
     else:
         print(f"未找到 WEB_DIST/frontend/dist（仅 API）: {WEB_DIST}", flush=True)
-    print(f"监听 :{port}  —  PUBLIC_BASE_URL={public_base_url()}", flush=True)
-    ThreadingHTTPServer(("", port), Handler).serve_forever()
+    server = ThreadingHTTPServer(("", port), Handler)
+    scheme = "http"
+    if tls is not None:
+        cert_file, key_file = tls
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(certfile=cert_file, keyfile=key_file)
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+        scheme = "https"
+    base = configured_public_base_url() or "由请求 Host / X-Forwarded-* 头推断"
+    print(f"监听 {scheme}://0.0.0.0:{port}  —  PUBLIC_BASE_URL={base}", flush=True)
+    server.serve_forever()
 
 
 if __name__ == "__main__":

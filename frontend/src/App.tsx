@@ -5,7 +5,7 @@ import QRCode from "react-qr-code";
 const apiBase = (() => {
   const raw = import.meta.env.VITE_API_BASE;
   if (raw !== undefined && raw !== "") return raw.replace(/\/$/, "");
-  return import.meta.env.DEV ? "http://localhost:4000" : "";
+  return import.meta.env.DEV ? "https://localhost:4000" : "";
 })();
 
 type CreateResp = {
@@ -71,7 +71,7 @@ export default function App() {
       }
       setResult(j as CreateResp);
     } catch {
-      setError("无法连接后端，请确认服务已启动（默认 http://localhost:4000）。");
+      setError("无法连接后端，请确认 HTTPS 后端服务已启动（默认 https://localhost:4000）。");
     } finally {
       setPending(false);
     }

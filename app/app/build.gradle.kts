@@ -15,13 +15,40 @@ android {
         versionCode = 1
         versionName = "1.0"
 
-        val apiBase = providers.gradleProperty("API_BASE_URL").orElse("http://10.0.2.2:4000").get()
+        val apiBase = providers.gradleProperty("API_BASE_URL").orElse("https://10.0.2.2:4000").get()
         buildConfigField("String", "API_BASE_URL", "\"${apiBase.trimEnd('/')}\"")
+    }
+
+    signingConfigs {
+        create("release") {
+            storeFile = file("E:/AppKeys/MessageRead.jks") // 改成你刚才保存的真实路径
+            storePassword = "1135540486ppt"
+            keyAlias = "key0"
+            keyPassword = "1135540486ppt"
+        }
+    }
+
+    buildTypes {
+        getByName("release") {
+            isMinifyEnabled = false
+            // 2. 将签名应用到 release 版本
+            signingConfig = signingConfigs.getByName("release")
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
     }
 
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
     }
 }
 
