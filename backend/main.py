@@ -183,7 +183,8 @@ class Handler(SimpleHTTPRequestHandler):
         print("%s - - [%s] %s" % (self.address_string(), self.log_date_time_string(), format % args), flush=True)
 
     def end_headers(self) -> None:
-        origin = self.headers.get("Origin")
+        headers = getattr(self, "headers", None)
+        origin = headers.get("Origin") if headers is not None else None
         if origin:
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Access-Control-Allow-Credentials", "true")
