@@ -16,7 +16,7 @@ services:
     depends_on:
       - redis
     environment:
-      PUBLIC_BASE_URL: "http://test1.nyte.asia/message_read"
+      PUBLIC_BASE_URL: "https://test1.nyte.asia/message_read"
       PORT: "4000"
       REDIS_ADDR: "redis:6379"
       REDIS_DB: "0"
