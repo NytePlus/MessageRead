@@ -15,11 +15,12 @@ import (
 )
 
 type Message struct {
-	ID        string
-	ToName    string
-	Body      string
-	CreatedAt int64
-	ReadAt    *int64
+	ID             string
+	ToName         string
+	Body           string
+	CreatedAt      int64
+	ReadAt         *int64
+	OwnerVisitorID string
 }
 
 type createPayload struct {
@@ -70,6 +71,27 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func visitorID(w http.ResponseWriter, r *http.Request) string {
+	const cookieName = "read_receipt_visitor"
+	if c, err := r.Cookie(cookieName); err == nil {
+		v := trimStr(c.Value)
+		if v != "" {
+			return v
+		}
+	}
+
+	id := nanoID(24)
+	http.SetCookie(w, &http.Cookie{
+		Name:     cookieName,
+		Value:    id,
+		Path:     "/",
+		MaxAge:   int((365 * 24 * time.Hour).Seconds()),
+		SameSite: http.SameSiteLaxMode,
+		HttpOnly: true,
+	})
+	return id
 }
 
 func applyCORS(w http.ResponseWriter, r *http.Request) {
@@ -183,12 +205,16 @@ func handleOpen(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 
+	vid := visitorID(w, r)
+
 	mu.Lock()
 	m, ok := store[id]
 	var first bool
 	if ok && m != nil {
-		first = m.ReadAt == nil
-		if first {
+		if m.OwnerVisitorID == "" {
+			m.OwnerVisitorID = vid
+			first = true
+		} else if m.OwnerVisitorID != vid && m.ReadAt == nil {
 			ts := time.Now().UnixMilli()
 			m.ReadAt = &ts
 		}
