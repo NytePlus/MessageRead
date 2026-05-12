@@ -14,9 +14,6 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
-
-        val apiBase = providers.gradleProperty("API_BASE_URL").orElse("https://10.0.2.2:4000").get()
-        buildConfigField("String", "API_BASE_URL", "\"${apiBase.trimEnd('/')}\"")
     }
 
     signingConfigs {
@@ -29,7 +26,21 @@ android {
     }
 
     buildTypes {
+        getByName("debug") {
+            val apiBase = providers.gradleProperty("DEBUG_API_BASE_URL")
+                .orElse("http://10.0.2.2:4000")
+                .get()
+            buildConfigField("String", "API_BASE_URL", "\"${apiBase.trimEnd('/')}\"")
+            manifestPlaceholders["usesCleartextTraffic"] = "true"
+        }
+
         getByName("release") {
+            val apiBase = providers.gradleProperty("RELEASE_API_BASE_URL")
+                .orElse(providers.gradleProperty("API_BASE_URL"))
+                .orElse("https://10.0.2.2:4000")
+                .get()
+            buildConfigField("String", "API_BASE_URL", "\"${apiBase.trimEnd('/')}\"")
+            manifestPlaceholders["usesCleartextTraffic"] = "false"
             isMinifyEnabled = false
             // 2. 将签名应用到 release 版本
             signingConfig = signingConfigs.getByName("release")

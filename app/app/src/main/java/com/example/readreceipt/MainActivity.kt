@@ -1,6 +1,7 @@
 package com.example.readreceipt
 
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.os.Bundle
@@ -471,12 +472,7 @@ fun QrDialog(message: ChatMessage, onDismiss: () -> Unit) {
             Button(
                 colors = ButtonDefaults.buttonColors(containerColor = androidx.compose.ui.graphics.Color(0xFF07C160)),
                 onClick = {
-                    val launchIntent = context.packageManager.getLaunchIntentForPackage("com.tencent.mm")
-                    if (launchIntent != null) {
-                        context.startActivity(launchIntent)
-                    } else {
-                        Toast.makeText(context, "未检测到微信", Toast.LENGTH_SHORT).show()
-                    }
+                    openWeChat(context)
                 }
             ) {
                 Text("打开微信")
@@ -511,6 +507,23 @@ fun QrDialog(message: ChatMessage, onDismiss: () -> Unit) {
             }
         }
     )
+}
+
+fun openWeChat(context: Context) {
+    val launchIntent = context.packageManager
+        .getLaunchIntentForPackage("com.tencent.mm")
+        ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+    if (launchIntent == null) {
+        Toast.makeText(context, "未检测到微信", Toast.LENGTH_SHORT).show()
+        return
+    }
+
+    runCatching {
+        context.startActivity(launchIntent)
+    }.onFailure {
+        Toast.makeText(context, "无法打开微信", Toast.LENGTH_SHORT).show()
+    }
 }
 
 suspend fun createMessage(toName: String, body: String): CreateResp = withContext(Dispatchers.IO) {
