@@ -64,12 +64,18 @@ function fmtTime(ms: number | null) {
   return new Date(ms).toLocaleString();
 }
 
+const PENDING_AUTH_STORAGE = "alipayPendingAuth:";
+
 export default function App() {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
   const isAdmin = params.get("admin") === "1";
+  const authQrUuid = params.get("authQr")?.trim() || "";
   const providerUuid = params.get("provider") || "";
   const orderNo = params.get("order") || "";
 
+  if (isAdmin && authQrUuid) {
+    return <AdminAuthQrPage providerUuid={authQrUuid} />;
+  }
   return isAdmin ? <AdminPage /> : <PayPage providerUuid={providerUuid} orderNo={orderNo} />;
 }
 
@@ -79,9 +85,25 @@ function AdminPage() {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [pricing, setPricing] = useState<Pricing | null>(null);
   const [priceInput, setPriceInput] = useState("");
-  const [authUrl, setAuthUrl] = useState("");
+  /** 待授权服务商对应的授权链接（授权成功后由服务端状态与本地清理同步移除） */
+  const [pendingAuthByUuid, setPendingAuthByUuid] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  function syncPendingAuthFromServer(list: Provider[]) {
+    const next: Record<string, string> = {};
+    for (const p of list) {
+      if (p.status !== "pending") {
+        sessionStorage.removeItem(PENDING_AUTH_STORAGE + p.uuid);
+        continue;
+      }
+      const stored = sessionStorage.getItem(PENDING_AUTH_STORAGE + p.uuid);
+      if (stored) {
+        next[p.uuid] = stored;
+      }
+    }
+    setPendingAuthByUuid(next);
+  }
 
   async function loadAdminData() {
     const [providersResp, pricingResp] = await Promise.all([
@@ -91,6 +113,7 @@ function AdminPage() {
     setProviders(providersResp.providers);
     setPricing(pricingResp.pricing);
     setPriceInput(pricingResp.pricing?.price || "");
+    syncPendingAuthFromServer(providersResp.providers);
   }
 
   useEffect(() => {
@@ -125,7 +148,8 @@ function AdminPage() {
     setLoading(true);
     try {
       const res = await api<AuthUrlResp>("/api/admin/providers/auth-url", { method: "POST" });
-      setAuthUrl(res.authUrl);
+      sessionStorage.setItem(PENDING_AUTH_STORAGE + res.provider.uuid, res.authUrl);
+      setPendingAuthByUuid((prev) => ({ ...prev, [res.provider.uuid]: res.authUrl }));
       await loadAdminData();
     } catch (err) {
       setError(err instanceof Error ? err.message : "创建授权链接失败");
@@ -179,13 +203,8 @@ function AdminPage() {
           <h2>服务商列表</h2>
           <button className="btn" onClick={createAuthUrl} disabled={loading}>添加服务商</button>
         </div>
+        <p className="muted small-hint">添加后请在对应「待授权」行的「授权二维码页」扫码；授权成功后该行不再显示二维码入口。</p>
         {error ? <p className="error">{error}</p> : null}
-        {authUrl ? (
-          <div className="auth-box">
-            <div className="qr"><QRCode value={authUrl} size={180} /></div>
-            <a href={authUrl} target="_blank" rel="noreferrer">打开授权链接</a>
-          </div>
-        ) : null}
         <div className="list">
           {providers.map((provider) => (
             <div className="item" key={provider.uuid}>
@@ -194,11 +213,53 @@ function AdminPage() {
                 <p className="muted">状态：{provider.status} · 授权时间：{fmtTime(provider.authorizedAt)}</p>
                 <p className="muted">userId：{provider.userId || "-"} · authAppId：{provider.authAppId || "-"}</p>
               </div>
-              <a href={`?provider=${provider.uuid}`} target="_blank" rel="noreferrer">用户收费页</a>
+              <div className="item-links">
+                <a href={`?provider=${provider.uuid}`} target="_blank" rel="noreferrer">用户收费页</a>
+                {provider.status === "pending" && pendingAuthByUuid[provider.uuid] ? (
+                  <a href={`?admin=1&authQr=${encodeURIComponent(provider.uuid)}`} target="_blank" rel="noreferrer">
+                    授权二维码页
+                  </a>
+                ) : null}
+              </div>
             </div>
           ))}
           {providers.length === 0 ? <p className="muted">暂无服务商</p> : null}
         </div>
+      </section>
+      <Styles />
+    </Page>
+  );
+}
+
+function AdminAuthQrPage({ providerUuid }: { providerUuid: string }) {
+  const authUrl = sessionStorage.getItem(PENDING_AUTH_STORAGE + providerUuid) || "";
+
+  return (
+    <Page title="服务商授权" subtitle={`UUID：${providerUuid}`}>
+      <section className="card stack center">
+        {!authUrl ? (
+          <>
+            <p className="error">未找到该服务商的授权链接，请返回列表重新「添加服务商」或确认本浏览器未清除站点数据。</p>
+            <a className="btn" href="?admin=1">返回管理页</a>
+          </>
+        ) : (
+          <>
+            <p className="muted">请使用支付宝扫描下方二维码完成授权。授权完成后可关闭本页。</p>
+            <div className="auth-box">
+              <div className="qr">
+                <QRCode value={authUrl} size={220} />
+              </div>
+            </div>
+            <div className="row center-wrap">
+              <a className="btn link-btn" href={authUrl} target="_blank" rel="noreferrer">
+                打开授权链接
+              </a>
+              <a className="btn btn-outline" href="?admin=1">
+                返回管理页
+              </a>
+            </div>
+          </>
+        )}
       </section>
       <Styles />
     </Page>
@@ -330,8 +391,12 @@ function Styles() {
       .qr { background: white; border: 1px solid #e5eaf2; border-radius: 14px; padding: 14px; width: fit-content; }
       .list { display: flex; flex-direction: column; gap: 10px; }
       .item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px; border: 1px solid #e5eaf2; border-radius: 14px; background: #f8fafc; }
+      .item-links { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; flex-shrink: 0; }
+      .small-hint { font-size: 0.85rem; margin: -4px 0 0; }
+      .center-wrap { flex-wrap: wrap; justify-content: center; }
+      .btn-outline { background: #fff; color: #1d4ed8; border: 1px solid #c7d2fe; box-shadow: none; }
       a { color: #1d4ed8; font-weight: 600; }
-      @media (max-width: 640px) { .row, .item { flex-direction: column; align-items: stretch; } .shell { margin-top: 20px; } }
+      @media (max-width: 640px) { .row, .item { flex-direction: column; align-items: stretch; } .item-links { align-items: flex-start; } .shell { margin-top: 20px; } }
     `}</style>
   );
 }
