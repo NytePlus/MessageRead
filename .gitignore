@@ -1,12 +1,15 @@
 node_modules/
 dist/
 frontend/dist/
+
 # Android project under app/ — build outputs & caches
 app/.gradle/
 app/**/build/
 app/**/.cxx/
 app/**/.externalNativeBuild/
 app/app/release
+app/.kotlin/
+
 __pycache__/
 *.pyc
 .DS_Store

@@ -504,6 +504,12 @@ fun QrDialog(message: ChatMessage, onDismiss: () -> Unit) {
                     lineHeight = 22.sp,
                     textAlign = TextAlign.Center
                 )
+                Button(
+                    colors = ButtonDefaults.buttonColors(containerColor = androidx.compose.ui.graphics.Color(0xFF07C160)),
+                    onClick = { shareLinkToWeChat(context, openUrl) }
+                ) {
+                    Text("通过链接分享")
+                }
             }
         }
     )
@@ -523,6 +529,26 @@ fun openWeChat(context: Context) {
         context.startActivity(launchIntent)
     }.onFailure {
         Toast.makeText(context, "无法打开微信", Toast.LENGTH_SHORT).show()
+    }
+}
+
+fun shareLinkToWeChat(context: Context, openUrl: String) {
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        setPackage("com.tencent.mm")
+        putExtra(Intent.EXTRA_TEXT, openUrl)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+
+    if (intent.resolveActivity(context.packageManager) == null) {
+        Toast.makeText(context, "未检测到微信或无法分享", Toast.LENGTH_SHORT).show()
+        return
+    }
+
+    runCatching {
+        context.startActivity(intent)
+    }.onFailure {
+        Toast.makeText(context, "无法通过微信分享链接", Toast.LENGTH_SHORT).show()
     }
 }
 

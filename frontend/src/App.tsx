@@ -1,271 +1,336 @@
-import { useEffect, useState } from "react";
-import type { FormEvent } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { FormEvent, ReactNode } from "react";
 import QRCode from "react-qr-code";
 
 const apiBase = (() => {
   const raw = import.meta.env.VITE_API_BASE;
   if (raw !== undefined && raw !== "") return raw.replace(/\/$/, "");
-  return import.meta.env.DEV ? "https://localhost:4000" : "";
+  return import.meta.env.DEV ? "https://localhost:4000" : ".";
 })();
 
-type CreateResp = {
-  id: string;
-  openUrl: string;
-  statusUrl: string;
-};
-
-type StatusResp = {
-  read: boolean;
-  readAt: number | null;
+type Pricing = {
+  id: number;
+  price: string;
   createdAt: number;
 };
 
-export default function App() {
-  const [toName, setToName] = useState("");
-  const [body, setBody] = useState("");
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+type Provider = {
+  id: number;
+  uuid: string;
+  createdAt: number;
+  authorizedAt: number | null;
+  status: string;
+  authAppId: string;
+  userId: string;
+  hasToken: boolean;
+};
 
-  const [result, setResult] = useState<CreateResp | null>(null);
-  const [status, setStatus] = useState<StatusResp | null>(null);
+type PayConfig = {
+  providerExists: boolean;
+  providerUuid: string;
+  pricing: Pricing | null;
+  paid: boolean;
+};
+
+type OrderStatus = {
+  outTradeNo: string;
+  status: string;
+  paid: boolean;
+};
+
+type AuthUrlResp = {
+  provider: Provider;
+  authUrl: string;
+};
+
+async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${apiBase}${path}`, {
+    credentials: "include",
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers || {}),
+    },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(typeof data.error === "string" ? data.error : "请求失败");
+  }
+  return data as T;
+}
+
+function fmtTime(ms: number | null) {
+  if (!ms) return "-";
+  return new Date(ms).toLocaleString();
+}
+
+export default function App() {
+  const params = useMemo(() => new URLSearchParams(window.location.search), []);
+  const isAdmin = params.get("admin") === "1";
+  const providerUuid = params.get("provider") || "";
+  const orderNo = params.get("order") || "";
+
+  return isAdmin ? <AdminPage /> : <PayPage providerUuid={providerUuid} orderNo={orderNo} />;
+}
+
+function AdminPage() {
+  const [password, setPassword] = useState("");
+  const [authed, setAuthed] = useState(false);
+  const [providers, setProviders] = useState<Provider[]>([]);
+  const [pricing, setPricing] = useState<Pricing | null>(null);
+  const [priceInput, setPriceInput] = useState("");
+  const [authUrl, setAuthUrl] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function loadAdminData() {
+    const [providersResp, pricingResp] = await Promise.all([
+      api<{ providers: Provider[] }>("/api/admin/providers"),
+      api<{ pricing: Pricing | null }>("/api/admin/pricing"),
+    ]);
+    setProviders(providersResp.providers);
+    setPricing(pricingResp.pricing);
+    setPriceInput(pricingResp.pricing?.price || "");
+  }
 
   useEffect(() => {
-    if (!result?.id) return;
+    api<{ authenticated: boolean }>("/api/admin/me")
+      .then((res) => {
+        setAuthed(res.authenticated);
+        if (res.authenticated) return loadAdminData();
+      })
+      .catch(() => undefined);
+  }, []);
 
-    let cancelled = false;
-    const tick = async () => {
-      try {
-        const r = await fetch(`${apiBase}/api/messages/${result.id}/status`);
-        if (!r.ok) return;
-        const j = (await r.json()) as StatusResp;
-        if (!cancelled) setStatus(j);
-      } catch {
-        /* ignore poll errors */
-      }
-    };
-
-    tick();
-    const id = setInterval(tick, 2500);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [result?.id]);
-
-  async function onSubmit(e: FormEvent) {
+  async function login(e: FormEvent) {
     e.preventDefault();
-    setError(null);
-    setPending(true);
-    setResult(null);
-    setStatus(null);
+    setError("");
+    setLoading(true);
     try {
-      const r = await fetch(`${apiBase}/api/messages`, {
+      await api("/api/admin/login", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ toName: toName.trim(), body: body.trim() }),
+        body: JSON.stringify({ password }),
       });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) {
-        setError(typeof j.error === "string" ? j.error : "提交失败");
-        return;
-      }
-      setResult(j as CreateResp);
-    } catch {
-      setError("无法连接后端，请确认 HTTPS 后端服务已启动（默认 https://localhost:4000）。");
+      setAuthed(true);
+      await loadAdminData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "登录失败");
     } finally {
-      setPending(false);
+      setLoading(false);
     }
   }
 
+  async function createAuthUrl() {
+    setError("");
+    setLoading(true);
+    try {
+      const res = await api<AuthUrlResp>("/api/admin/providers/auth-url", { method: "POST" });
+      setAuthUrl(res.authUrl);
+      await loadAdminData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "创建授权链接失败");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function savePrice(e: FormEvent) {
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+    try {
+      const res = await api<{ pricing: Pricing }>("/api/admin/pricing", {
+        method: "POST",
+        body: JSON.stringify({ price: priceInput }),
+      });
+      setPricing(res.pricing);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存收费标准失败");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (!authed) {
+    return (
+      <Page title="管理员登录" subtitle="输入管理员密码后管理服务商授权和收费标准">
+        <form className="card stack" onSubmit={login}>
+          <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="管理员密码" />
+          {error ? <p className="error">{error}</p> : null}
+          <button className="btn" disabled={loading || !password}>登录</button>
+        </form>
+      </Page>
+    );
+  }
+
   return (
-    <div className="shell">
-      <header className="header">
-        <h1>消息已读统计</h1>
-        <p className="sub">填写内容后生成链接与二维码；对方首次打开页面即记为已读。</p>
-      </header>
+    <Page title="服务商管理" subtitle="生成授权二维码，授权成功后凭证会永久保存到 Redis">
+      <section className="card stack">
+        <h2>收费标准</h2>
+        <p className="muted">当前价位：{pricing ? `¥ ${pricing.price}` : "未配置"}</p>
+        <form className="row" onSubmit={savePrice}>
+          <input className="input" value={priceInput} onChange={(e) => setPriceInput(e.target.value)} placeholder="例如 9.90" />
+          <button className="btn" disabled={loading || !priceInput}>保存</button>
+        </form>
+      </section>
 
-      <form className="form" onSubmit={onSubmit}>
-        <label className="field">
-          <span className="label">TA 的名字</span>
-          <input
-            className="input"
-            value={toName}
-            onChange={(e) => setToName(e.target.value)}
-            placeholder="例如：小明"
-            autoComplete="off"
-          />
-        </label>
-        <label className="field">
-          <span className="label">你想对 TA 说的话</span>
-          <textarea
-            className="input textarea"
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            placeholder="写在这里…"
-            rows={5}
-          />
-        </label>
-        {error ? <p className="err">{error}</p> : null}
-        <button className="btn" type="submit" disabled={pending}>
-          {pending ? "提交中…" : "提交消息"}
-        </button>
-      </form>
-
-      {result ? (
-        <section className="out">
-          <h2 className="out-title">分享链接</h2>
-          <p className="link-wrap">
-            <a className="link" href={result.openUrl} target="_blank" rel="noreferrer">
-              {result.openUrl}
-            </a>
-          </p>
-          <div className="qr-wrap">
-            <QRCode value={result.openUrl} size={200} />
+      <section className="card stack">
+        <div className="row between">
+          <h2>服务商列表</h2>
+          <button className="btn" onClick={createAuthUrl} disabled={loading}>添加服务商</button>
+        </div>
+        {error ? <p className="error">{error}</p> : null}
+        {authUrl ? (
+          <div className="auth-box">
+            <div className="qr"><QRCode value={authUrl} size={180} /></div>
+            <a href={authUrl} target="_blank" rel="noreferrer">打开授权链接</a>
           </div>
-          <div className="status">
-            <span className="status-label">已读状态</span>
-            {status?.read ? (
-              <span className="badge read">
-                已读
-                {status.readAt != null
-                  ? ` · ${new Date(status.readAt).toLocaleString()}`
-                  : ""}
-              </span>
+        ) : null}
+        <div className="list">
+          {providers.map((provider) => (
+            <div className="item" key={provider.uuid}>
+              <div>
+                <strong>#{provider.id} {provider.uuid}</strong>
+                <p className="muted">状态：{provider.status} · 授权时间：{fmtTime(provider.authorizedAt)}</p>
+                <p className="muted">userId：{provider.userId || "-"} · authAppId：{provider.authAppId || "-"}</p>
+              </div>
+              <a href={`?provider=${provider.uuid}`} target="_blank" rel="noreferrer">用户收费页</a>
+            </div>
+          ))}
+          {providers.length === 0 ? <p className="muted">暂无服务商</p> : null}
+        </div>
+      </section>
+      <Styles />
+    </Page>
+  );
+}
+
+function PayPage({ providerUuid, orderNo }: { providerUuid: string; orderNo: string }) {
+  const [config, setConfig] = useState<PayConfig | null>(null);
+  const [order, setOrder] = useState<OrderStatus | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function loadConfig() {
+    if (!providerUuid) return;
+    const res = await api<PayConfig>(`/api/pay/config?providerUuid=${encodeURIComponent(providerUuid)}`);
+    setConfig(res);
+  }
+
+  useEffect(() => {
+    loadConfig().catch((err) => setError(err instanceof Error ? err.message : "加载收费信息失败"));
+  }, [providerUuid]);
+
+  useEffect(() => {
+    if (!orderNo) return;
+    const tick = () => {
+      api<OrderStatus>(`/api/pay/orders?outTradeNo=${encodeURIComponent(orderNo)}`)
+        .then((res) => {
+          setOrder(res);
+          if (res.paid) loadConfig().catch(() => undefined);
+        })
+        .catch(() => undefined);
+    };
+    tick();
+    const id = window.setInterval(tick, 2500);
+    return () => window.clearInterval(id);
+  }, [orderNo]);
+
+  async function startPay() {
+    setError("");
+    setLoading(true);
+    try {
+      const res = await api<{ payUrl?: string; paid?: boolean; outTradeNo?: string }>("/api/pay/orders", {
+        method: "POST",
+        body: JSON.stringify({ providerUuid }),
+      });
+      if (res.paid) {
+        await loadConfig();
+      } else if (res.payUrl) {
+        window.location.href = res.payUrl;
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "创建支付订单失败");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (!providerUuid) {
+    return (
+      <Page title="收费下载" subtitle="缺少服务商 UUID">
+        <section className="card"><p className="error">请通过服务商专属链接进入收费页面。</p></section>
+      </Page>
+    );
+  }
+
+  const paid = config?.paid || order?.paid;
+  const canPay = config?.providerExists && config?.pricing;
+
+  return (
+    <Page title="收费下载" subtitle={`服务商：${providerUuid}`}>
+      <section className="card stack center">
+        {error ? <p className="error">{error}</p> : null}
+        {!config ? <p className="muted">正在加载收费信息...</p> : null}
+        {config && !config.providerExists ? <p className="error">服务商不存在或尚未完成授权。</p> : null}
+        {config?.providerExists && !config.pricing ? <p className="error">管理员尚未配置收费标准。</p> : null}
+        {canPay ? (
+          <>
+            <p className="price">¥ {config.pricing?.price}</p>
+            <p className="muted">支付成功后可下载 APK。请及时下载，在当前浏览器 session 保存期间无需再次付费。</p>
+            {orderNo && !paid ? <p className="muted">支付结果确认中，请稍候...</p> : null}
+            {paid ? (
+              <a className="btn link-btn" href={`${apiBase}/api/download/apk?providerUuid=${encodeURIComponent(providerUuid)}`}>下载 APK</a>
             ) : (
-              <span className="badge unread">未读</span>
+              <button className="btn" onClick={startPay} disabled={loading}>跳转支付宝付款</button>
             )}
-          </div>
-        </section>
-      ) : null}
+          </>
+        ) : null}
+      </section>
+      <Styles />
+    </Page>
+  );
+}
 
-      <style>{`
-        .shell {
-          width: min(460px, 100%);
-          background: rgba(15, 23, 42, 0.75);
-          backdrop-filter: blur(12px);
-          border: 1px solid rgba(148, 163, 184, 0.28);
-          border-radius: 20px;
-          padding: 28px 26px 32px;
-          box-shadow: 0 28px 60px rgba(0, 0, 0, 0.45);
-        }
-        .header h1 {
-          margin: 0 0 8px;
-          font-size: 1.35rem;
-          font-weight: 600;
-          letter-spacing: 0.02em;
-        }
-        .sub {
-          margin: 0;
-          font-size: 0.875rem;
-          color: #94a3b8;
-          line-height: 1.5;
-        }
-        .form {
-          margin-top: 22px;
-          display: flex;
-          flex-direction: column;
-          gap: 16px;
-        }
-        .field {
-          display: flex;
-          flex-direction: column;
-          gap: 6px;
-        }
-        .label {
-          font-size: 0.8rem;
-          color: #cbd5e1;
-          font-weight: 500;
-        }
-        .input {
-          width: 100%;
-          padding: 10px 12px;
-          border-radius: 10px;
-          border: 1px solid rgba(148, 163, 184, 0.35);
-          background: rgba(30, 41, 59, 0.6);
-          color: #f1f5f9;
-          font-size: 1rem;
-          outline: none;
-        }
-        .input:focus {
-          border-color: #38bdf8;
-          box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.25);
-        }
-        .textarea {
-          resize: vertical;
-          min-height: 100px;
-          line-height: 1.5;
-        }
-        .err {
-          margin: 0;
-          font-size: 0.875rem;
-          color: #fca5a5;
-        }
-        .btn {
-          margin-top: 4px;
-          padding: 12px 16px;
-          border: none;
-          border-radius: 12px;
-          background: linear-gradient(135deg, #0ea5e9, #2563eb);
-          color: #fff;
-          font-size: 1rem;
-          font-weight: 600;
-          cursor: pointer;
-        }
-        .btn:disabled {
-          opacity: 0.65;
-          cursor: not-allowed;
-        }
-        .out {
-          margin-top: 26px;
-          padding-top: 22px;
-          border-top: 1px solid rgba(148, 163, 184, 0.2);
-        }
-        .out-title {
-          margin: 0 0 10px;
-          font-size: 1rem;
-          font-weight: 600;
-        }
-        .link-wrap {
-          margin: 0 0 16px;
-          word-break: break-all;
-        }
-        .link {
-          color: #7dd3fc;
-          font-size: 0.85rem;
-        }
-        .qr-wrap {
-          display: flex;
-          justify-content: center;
-          padding: 16px;
-          background: #fff;
-          border-radius: 14px;
-          width: fit-content;
-          margin: 0 auto 18px;
-        }
-        .status {
-          display: flex;
-          flex-wrap: wrap;
-          align-items: center;
-          gap: 10px;
-          font-size: 0.9rem;
-        }
-        .status-label {
-          color: #94a3b8;
-        }
-        .badge {
-          padding: 4px 10px;
-          border-radius: 999px;
-          font-weight: 500;
-        }
-        .badge.unread {
-          background: rgba(251, 191, 36, 0.18);
-          color: #fcd34d;
-        }
-        .badge.read {
-          background: rgba(74, 222, 128, 0.16);
-          color: #86efac;
-        }
-      `}</style>
-    </div>
+function Page({ title, subtitle, children }: { title: string; subtitle: string; children: ReactNode }) {
+  return (
+    <main className="shell">
+      <header className="hero">
+        <h1>{title}</h1>
+        <p>{subtitle}</p>
+      </header>
+      {children}
+      <Styles />
+    </main>
+  );
+}
+
+function Styles() {
+  return (
+    <style>{`
+      .shell { width: min(880px, calc(100% - 32px)); margin: 40px auto; color: #e5e7eb; }
+      .hero { margin-bottom: 20px; }
+      .hero h1 { margin: 0 0 8px; font-size: 28px; }
+      .hero p, .muted { color: #94a3b8; line-height: 1.6; }
+      .card { background: rgba(15, 23, 42, .82); border: 1px solid rgba(148, 163, 184, .22); border-radius: 18px; padding: 22px; margin-bottom: 16px; box-shadow: 0 18px 48px rgba(0, 0, 0, .28); }
+      .stack { display: flex; flex-direction: column; gap: 14px; }
+      .row { display: flex; gap: 12px; align-items: center; }
+      .between { justify-content: space-between; }
+      .center { align-items: center; text-align: center; }
+      h2 { margin: 0; font-size: 19px; }
+      p { margin: 0; }
+      .input { flex: 1; min-width: 0; border: 1px solid rgba(148, 163, 184, .35); border-radius: 12px; padding: 12px 14px; background: rgba(30, 41, 59, .8); color: #f8fafc; font-size: 16px; }
+      .btn { border: none; border-radius: 12px; padding: 12px 18px; background: #0ea5e9; color: white; font-weight: 700; cursor: pointer; text-decoration: none; display: inline-block; }
+      .btn:disabled { opacity: .55; cursor: not-allowed; }
+      .link-btn { background: #22c55e; }
+      .error { color: #fca5a5; }
+      .price { font-size: 46px; font-weight: 800; color: #fff; }
+      .auth-box { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+      .qr { background: white; border-radius: 14px; padding: 14px; width: fit-content; }
+      .list { display: flex; flex-direction: column; gap: 10px; }
+      .item { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px; border: 1px solid rgba(148, 163, 184, .18); border-radius: 14px; background: rgba(30, 41, 59, .45); }
+      a { color: #7dd3fc; }
+      @media (max-width: 640px) { .row, .item { flex-direction: column; align-items: stretch; } .shell { margin-top: 20px; } }
+    `}</style>
   );
 }
