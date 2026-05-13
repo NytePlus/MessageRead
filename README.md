@@ -14,13 +14,12 @@
 ├── frontend/       # React + Vite 前端
 ├── app/            # Android Compose App
 ├── docker-compose.yml
-├── package.json
 └── README.md
 ```
 
 ## 快速启动（推荐）
 
-使用 Docker Compose 同时启动 Redis 和后端，后端会托管构建后的前端页面：
+使用 Docker Compose 同时启动 Redis、后端、前端和 Nginx；前端独立构建为单独 service：
 
 ```powershell
 docker compose up --build
@@ -39,6 +38,7 @@ PUBLIC_BASE_URL: "https://example.com"
 ### 1. 安装前端依赖
 
 ```powershell
+cd frontend
 npm install
 ```
 
@@ -73,7 +73,8 @@ $env:TLS_KEY_FILE = "C:\certs\privkey.pem"
 ### 5. 启动前端
 
 ```powershell
-npm run dev -w frontend
+cd frontend
+npm run dev
 ```
 
 打开 [http://localhost:5173](http://localhost:5173)。开发前端会默认通过 HTTPS 调用后端接口。
@@ -92,7 +93,6 @@ VITE_API_BASE=https://localhost:4000
 | `PUBLIC_BASE_URL` | 生成 `openUrl` / `statusUrl` 的根地址；未设置时从 `Host` / `X-Forwarded-*` 请求头推断 | 空 |
 | `TLS_CERT_FILE` | 后端直接启用 HTTPS 时使用的证书文件 | 空 |
 | `TLS_KEY_FILE` | 后端直接启用 HTTPS 时使用的私钥文件 | 空 |
-| `WEB_DIST` | 前端构建目录，存在则由后端托管 SPA | `frontend/dist` |
 | `REDIS_ADDR` | Redis 地址 | `localhost:6379` |
 | `REDIS_PASSWORD` | Redis 密码 | 空 |
 | `REDIS_DB` | Redis DB | `0` |

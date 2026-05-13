@@ -16,18 +16,18 @@ services:
     depends_on:
       - redis
     environment:
-      PUBLIC_BASE_URL: "https://test1.nyte.asia/message_read"
+      PUBLIC_BASE_URL: "http://47.121.190.61:4000"
       PORT: "4000"
       REDIS_ADDR: "redis:6379"
       REDIS_DB: "0"
-      TLS_CERT_FILE: /etc/ssl/cert.pem
-      TLS_KEY_FILE: /etc/ssl/key.pem
+      # TLS_CERT_FILE: /etc/ssl/cert.pem
+      # TLS_KEY_FILE: /etc/ssl/key.pem
       ADMIN_PASSWORD: "141516"
       DEFAULT_PRICE: "10"
       APK_FILE: /app/downloads/app.apk
       ALIPAY_APP_ID: "2021006154646127"
-      ALIPAY_PRIVATE_KEY: ${ALIPAY_PRIVATE_KEY:-}
-      ALIPAY_PUBLIC_KEY: ${ALIPAY_PUBLIC_KEY:-}
+      ALIPAY_PRIVATE_KEY: /app/alipay/private.key
+      ALIPAY_PUBLIC_KEY: /app/alipay/public.key
       ALIPAY_GATEWAY: "https://openapi.alipay.com/gateway.do"
     volumes:
       - ./backend/ssl:/etc/ssl:ro
@@ -35,6 +35,15 @@ services:
       - ./backend/alipay:/app/alipay:ro
     ports:
       - "4000:4000"
+    networks:
+      - app-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    depends_on:
+      - backend
     networks:
       - app-network
 
@@ -49,6 +58,7 @@ services:
       - ./backend/ssl:/etc/nginx/ssl:ro
     depends_on:
       - backend
+      - frontend
     networks:
       - app-network
 
