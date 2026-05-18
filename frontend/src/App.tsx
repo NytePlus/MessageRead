@@ -2,10 +2,64 @@ import { useEffect, useMemo, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import QRCode from "react-qr-code";
 
+/** IPv4 地址（hostname 部分） */
+function isIPv4Hostname(hostname: string): boolean {
+  return /^(\d{1,3}\.){3}\d{1,3}$/.test(hostname);
+}
+
+/**
+ * 按约定选择协议：IP:端口 / 本机 → http；域名 → https（避免 HTTPS 页面混合内容）。
+ * 显式传入的协议会被覆盖为上述规则。
+ */
+function useHttpSchemeForApi(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  if (h === "localhost" || h === "127.0.0.1" || h === "::1") {
+    return true;
+  }
+  if (h.startsWith("[") && h.endsWith("]")) {
+    return true;
+  }
+  if (isIPv4Hostname(h)) {
+    return true;
+  }
+  if (h.includes(":")) {
+    return true;
+  }
+  return false;
+}
+
+function normalizeApiBase(raw: string): string {
+  const trimmed = raw.trim().replace(/\/$/, "");
+  if (trimmed === "") {
+    return "";
+  }
+
+  try {
+    let url: URL;
+    if (/^https?:\/\//i.test(trimmed)) {
+      url = new URL(trimmed);
+    } else if (trimmed.startsWith("//")) {
+      url = new URL(`http:${trimmed}`);
+    } else {
+      url = new URL(`http://${trimmed}`);
+    }
+
+    url.protocol = useHttpSchemeForApi(url.hostname) ? "http:" : "https:";
+
+    let out = url.toString();
+    out = out.replace(/\/+$/, "");
+    return out || trimmed;
+  } catch {
+    return trimmed;
+  }
+}
+
 const apiBase = (() => {
   const raw = import.meta.env.VITE_API_BASE;
-  if (raw !== undefined && raw !== "") return raw.replace(/\/$/, "");
-  return import.meta.env.DEV ? "https://localhost:4000" : ".";
+  if (raw !== undefined && raw !== "") {
+    return normalizeApiBase(raw);
+  }
+  return import.meta.env.DEV ? "http://localhost:4000" : ".";
 })();
 
 type Pricing = {
