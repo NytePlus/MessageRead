@@ -118,8 +118,6 @@ function fmtTime(ms: number | null) {
   return new Date(ms).toLocaleString();
 }
 
-const PENDING_AUTH_STORAGE = "alipayPendingAuth:";
-
 export default function App() {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
   const isAdmin = params.get("admin") === "1";
@@ -139,25 +137,8 @@ function AdminPage() {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [pricing, setPricing] = useState<Pricing | null>(null);
   const [priceInput, setPriceInput] = useState("");
-  /** 待授权服务商对应的授权链接（授权成功后由服务端状态与本地清理同步移除） */
-  const [pendingAuthByUuid, setPendingAuthByUuid] = useState<Record<string, string>>({});
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-
-  function syncPendingAuthFromServer(list: Provider[]) {
-    const next: Record<string, string> = {};
-    for (const p of list) {
-      if (p.status !== "pending") {
-        sessionStorage.removeItem(PENDING_AUTH_STORAGE + p.uuid);
-        continue;
-      }
-      const stored = sessionStorage.getItem(PENDING_AUTH_STORAGE + p.uuid);
-      if (stored) {
-        next[p.uuid] = stored;
-      }
-    }
-    setPendingAuthByUuid(next);
-  }
 
   async function loadAdminData() {
     const [providersResp, pricingResp] = await Promise.all([
@@ -167,7 +148,6 @@ function AdminPage() {
     setProviders(providersResp.providers);
     setPricing(pricingResp.pricing);
     setPriceInput(pricingResp.pricing?.price || "");
-    syncPendingAuthFromServer(providersResp.providers);
   }
 
   useEffect(() => {
@@ -201,9 +181,7 @@ function AdminPage() {
     setError("");
     setLoading(true);
     try {
-      const res = await api<AuthUrlResp>("/api/admin/providers/auth-url", { method: "POST" });
-      sessionStorage.setItem(PENDING_AUTH_STORAGE + res.provider.uuid, res.authUrl);
-      setPendingAuthByUuid((prev) => ({ ...prev, [res.provider.uuid]: res.authUrl }));
+      await api<AuthUrlResp>("/api/admin/providers/auth-url", { method: "POST" });
       await loadAdminData();
     } catch (err) {
       setError(err instanceof Error ? err.message : "创建授权链接失败");
@@ -242,7 +220,7 @@ function AdminPage() {
   }
 
   return (
-    <Page title="服务商管理" subtitle="生成授权二维码，授权成功后凭证会永久保存到 Redis">
+    <Page title="服务商管理" subtitle="授权链接保存在服务端 Redis（7 日有效）；打开二维码页需已登录管理员（同站新标签可共用登录态）">
       <section className="card stack">
         <h2>收费标准</h2>
         <p className="muted">当前价位：{pricing ? `¥ ${pricing.price}` : "未配置"}</p>
@@ -257,7 +235,7 @@ function AdminPage() {
           <h2>服务商列表</h2>
           <button className="btn" onClick={createAuthUrl} disabled={loading}>添加服务商</button>
         </div>
-        <p className="muted small-hint">添加后请在对应「待授权」行的「授权二维码页」扫码；授权成功后该行不再显示二维码入口。</p>
+        <p className="muted small-hint">添加后请在「待授权」行打开「授权二维码页」（新标签也可用）；Redis 过期后会自动按需重新生成链接。</p>
         {error ? <p className="error">{error}</p> : null}
         <div className="list">
           {providers.map((provider) => (
@@ -269,7 +247,7 @@ function AdminPage() {
               </div>
               <div className="item-links">
                 <a href={`?provider=${provider.uuid}`} target="_blank" rel="noreferrer">用户收费页</a>
-                {provider.status === "pending" && pendingAuthByUuid[provider.uuid] ? (
+                {provider.status === "pending" ? (
                   <a href={`?admin=1&authQr=${encodeURIComponent(provider.uuid)}`} target="_blank" rel="noreferrer">
                     授权二维码页
                   </a>
@@ -286,15 +264,49 @@ function AdminPage() {
 }
 
 function AdminAuthQrPage({ providerUuid }: { providerUuid: string }) {
-  const authUrl = sessionStorage.getItem(PENDING_AUTH_STORAGE + providerUuid) || "";
+  const [authUrl, setAuthUrl] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    const q = encodeURIComponent(providerUuid);
+    api<{ authUrl: string }>(`/api/admin/providers/auth-url?uuid=${q}`)
+      .then((data) => {
+        if (!cancelled) setAuthUrl(data.authUrl ?? "");
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "加载授权链接失败");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [providerUuid]);
 
   return (
     <Page title="服务商授权" subtitle={`UUID：${providerUuid}`}>
       <section className="card stack center">
-        {!authUrl ? (
+        {loading ? (
+          <p className="muted">正在加载授权链接…</p>
+        ) : error ? (
           <>
-            <p className="error">未找到该服务商的授权链接，请返回列表重新「添加服务商」或确认本浏览器未清除站点数据。</p>
-            <a className="btn" href="?admin=1">返回管理页</a>
+            <p className="error">{error}</p>
+            <p className="muted small-hint">
+              请确认仍以管理员登录，并从「服务商管理」进入；若链接在 Redis 中已过期，页面会尝试重新生成。
+            </p>
+            <a className="btn" href="?admin=1">
+              返回管理页
+            </a>
+          </>
+        ) : !authUrl ? (
+          <>
+            <p className="error">未返回授权链接，请稍后重试。</p>
+            <a className="btn" href="?admin=1">
+              返回管理页
+            </a>
           </>
         ) : (
           <>

@@ -36,6 +36,9 @@ ALIPAY_CHARSET = "utf-8"
 ALIPAY_SIGN_TYPE = "RSA2"
 ADMIN_SESSION_SECONDS = 12 * 60 * 60
 
+# 待授权服务商 OAuth 入口链接（仅 pending 时使用，授权成功后删除）。
+PROVIDER_PENDING_AUTH_URL_TTL_SECONDS = 7 * 24 * 60 * 60
+
 MARK_OPEN_SCRIPT = """
 local key = KEYS[1]
 local visitor = ARGV[1]
@@ -339,6 +342,22 @@ def provider_key(uuid: str) -> str:
     return f"provider:uuid:{uuid}"
 
 
+def provider_pending_auth_url_key(uuid: str) -> str:
+    return f"provider:pending_auth_url:{uuid}"
+
+
+def store_provider_pending_auth_url(provider_uuid: str, auth_url: str) -> None:
+    rdb.setex(provider_pending_auth_url_key(provider_uuid), PROVIDER_PENDING_AUTH_URL_TTL_SECONDS, auth_url)
+
+
+def provider_pending_auth_url(provider_uuid: str) -> str | None:
+    return rdb.get(provider_pending_auth_url_key(provider_uuid))
+
+
+def delete_provider_pending_auth_url(provider_uuid: str) -> None:
+    rdb.delete(provider_pending_auth_url_key(provider_uuid))
+
+
 def provider_id_key(provider_id: str) -> str:
     return f"provider:id:{provider_id}"
 
@@ -382,6 +401,7 @@ def save_authorized_provider(provider_uuid: str, token: dict[str, Any]) -> dict[
         }
     )
     rdb.hset(provider_key(provider_uuid), mapping=provider)
+    delete_provider_pending_auth_url(provider_uuid)
     return provider
 
 
@@ -616,6 +636,9 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/admin/me":
             self.handle_admin_me(head_only)
             return True
+        if path == "/api/admin/providers/auth-url":
+            self.handle_admin_provider_auth_url_get(head_only)
+            return True
         if path == "/api/admin/providers":
             self.handle_admin_providers(head_only)
             return True
@@ -757,6 +780,7 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             provider = create_provider()
             auth_url = alipay_auth_url(self.request_base_url(), provider["uuid"])
+            store_provider_pending_auth_url(provider["uuid"], auth_url)
         except RuntimeError as exc:
             self.write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
             return
@@ -764,6 +788,34 @@ class Handler(SimpleHTTPRequestHandler):
             HTTPStatus.OK,
             {"provider": public_provider(provider), "authUrl": auth_url},
         )
+
+    def handle_admin_provider_auth_url_get(self, head_only: bool) -> None:
+        if not self.require_admin():
+            return
+        provider_uuid = trim_str(self.query_params().get("uuid"))
+        if not provider_uuid:
+            self.write_json(HTTPStatus.BAD_REQUEST, {"error": "缺少 uuid。"}, head_only)
+            return
+        provider = get_provider(provider_uuid)
+        if provider is None:
+            self.write_json(HTTPStatus.NOT_FOUND, {"error": "服务商不存在。"}, head_only)
+            return
+        if provider.get("status") != "pending":
+            self.write_json(
+                HTTPStatus.BAD_REQUEST,
+                {"error": "该服务商已授权或不在待授权状态，无法获取授权链接。"},
+                head_only,
+            )
+            return
+        auth_url = provider_pending_auth_url(provider_uuid)
+        if not auth_url:
+            try:
+                auth_url = alipay_auth_url(self.request_base_url(), provider_uuid)
+            except RuntimeError as exc:
+                self.write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)}, head_only)
+                return
+            store_provider_pending_auth_url(provider_uuid, auth_url)
+        self.write_json(HTTPStatus.OK, {"authUrl": auth_url}, head_only)
 
     def handle_alipay_auth_callback(self, head_only: bool) -> None:
         params = self.query_params()
